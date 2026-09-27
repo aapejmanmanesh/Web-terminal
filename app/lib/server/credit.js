@@ -32,9 +32,11 @@ export const CREDIT_SCRIPT = `// WebTerm author credit — see LICENSE.
     'pointer-events:auto', 'background:#0a0d12', 'border:0', 'border-top:1px solid #1f2733', 'box-sizing:border-box',
   ].map((d) => d + ' !important').join(';');
   const APP_HEIGHT = 'height:calc(100% - ' + H + ') !important';
-  // Full-screen layers of the app end above the credit bar. The mobile shell
-  // keeps its inline height (set while the on-screen keyboard is open).
+  // Full-screen layers of the app end above the credit bar, so the desktop
+  // status bar stays visible. The mobile shell keeps its inline height (set
+  // while the on-screen keyboard is open).
   const LAYOUT_CSS =
+    'html body #app>.app{height:100%}' +
     'html body .m-app{height:calc(100dvh - ' + H + ')}' +
     'html body .m-nav{padding-bottom:0}' +
     'html body .page,html body .overlay-root{bottom:' + H + '}';
