@@ -19,6 +19,8 @@
 Open the address your administrator gave you (for example `https://term.example.com`) and sign in.
 There is no public sign-up. Administrators create accounts.
 
+![Sign-in page](images/login.png)
+
 - **Keep me signed in on this device** keeps you signed in for 30 days (configurable). Without it, the
   session ends after 12 hours of inactivity.
 - After several wrong passwords, sign-in is blocked for a while, per account and per network address.
@@ -120,6 +122,8 @@ until an administrator confirms it (this protects against man-in-the-middle atta
 
 The file browser works on the server (as your Linux account) and on every SSH host you have access to.
 Open it from the **Files** panel, or as a window / floating window with the buttons at the top of the panel.
+
+![Files panel](images/files.png)
 
 - **Location:** the button at the top switches between *This server* and your SSH hosts.
 - **Navigate:** double-click folders; Back / Forward (`Alt+←` / `Alt+→`), parent (`Backspace`).
