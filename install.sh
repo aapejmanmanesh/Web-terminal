@@ -207,12 +207,42 @@ if [ -n "$DOMAIN" ]; then PORT="${PORT:-8080}"; else PORT="${PORT:-8443}"; fi
 
 # ---------------------------------------------------------------- packages
 step "Installing system packages"
-export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq
-apt-get install -y -qq ca-certificates curl openssl openssh-client openssh-sftp-server util-linux iputils-ping tmux git xz-utils tar gzip >/dev/null
+# apt never waits for an answer nobody can see: keep changed config files,
+# restart services without asking, and give up on package sources that do not
+# answer instead of hanging on them.
+export DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSPEND=1
+APT_OPTS=(-o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o Acquire::Retries=1
+  -o DPkg::Lock::Timeout=600 -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold)
+APT_LOG=/tmp/webterm-apt.log
+APT_UPDATED=0
+missing_pkgs() { local p; for p in "$@"; do dpkg-query -W -f='${Status}' "$p" 2>/dev/null | grep -q 'ok installed' || echo "$p"; done; }
+apt_update() { # once per run, and only when something has to be installed
+  [ "$APT_UPDATED" = "1" ] && return 0
+  APT_UPDATED=1
+  printf '  %supdating package lists…%s\n' "$c_dim" "$c_off"
+  apt-get "${APT_OPTS[@]}" update >/tmp/webterm-apt-update.log 2>&1 || true
+  if grep -Eq '^(W|E): (Failed to fetch|Some index files)' /tmp/webterm-apt-update.log; then
+    warn "Some package sources did not answer; using the package lists already on this server:"
+    grep -Eo 'Failed to fetch [^ ]+' /tmp/webterm-apt-update.log | cut -d' ' -f4 | sed -E 's#^(https?://[^/]+/).*#    \1#' | sort -u | head -n 5 >&2
+  fi
+}
+apt_install() { # installs the packages that are missing; nothing to do → no network needed
+  local missing
+  missing=$(missing_pkgs "$@" | tr '\n' ' ')
+  [ -n "${missing// /}" ] || return 0
+  apt_update
+  printf '  %sinstalling %s%s\n' "$c_dim" "$missing" "$c_off"
+  # shellcheck disable=SC2086
+  if ! apt-get "${APT_OPTS[@]}" install -y -q $missing >"$APT_LOG" 2>&1; then
+    tail -n 15 "$APT_LOG" >&2
+    return 1
+  fi
+}
+apt_install ca-certificates curl openssl openssh-client openssh-sftp-server util-linux iputils-ping tmux git xz-utils tar gzip ||
+  die "Could not install the required packages (details: $APT_LOG)"
 if [ -n "$DOMAIN" ] && [ "$NGINX" = "1" ]; then
-  apt-get install -y -qq nginx >/dev/null
-  [ "$CERTBOT" = "1" ] && ! command -v certbot >/dev/null && { apt-get install -y -qq certbot >/dev/null || warn "certbot could not be installed"; }
+  apt_install nginx || die "nginx could not be installed (details: $APT_LOG)"
+  [ "$CERTBOT" = "1" ] && ! command -v certbot >/dev/null && { apt_install certbot || warn "certbot could not be installed"; }
 fi
 command -v setpriv >/dev/null || die "setpriv (util-linux) is missing"
 SFTP_SERVER=""
@@ -268,7 +298,7 @@ mkdir -p "$PREFIX/app.new"
 cp -a "$HERE/app/." "$PREFIX/app.new/"
 if [ ! -d "$PREFIX/app.new/node_modules/node-pty" ] || ! (cd "$PREFIX/app.new" && "$NODE" -e "require('node-pty')" 2>/dev/null); then
   step "Building native modules (first time can take a minute)"
-  apt-get install -y -qq build-essential python3 >/dev/null
+  apt_install build-essential python3 || die "Could not install the compiler (details: $APT_LOG)"
   # The bundled runtime ships without npm/headers; fetch a full Node.js to build with.
   BUILD_NODE="$PREFIX/node"
   if [ ! -x "$BUILD_NODE/bin/npm" ] || [ ! -d "$BUILD_NODE/include/node" ]; then BUILD_NODE="$(mktemp -d)/node"; download_node "$BUILD_NODE"; fi
@@ -440,14 +470,14 @@ if [ "${WITH_RDP:-1}" = "1" ] && [ "$(guacd_version)" != "$GUACD_VERSION" ]; the
     BUILD_DIR=$(mktemp -d)
     # Newer compilers and FreeRDP releases add warnings that guacd's build
     # treats as errors (also inside configure's feature checks): relax those.
-    command -v gcc >/dev/null || apt-get install -y -qq build-essential >/dev/null 2>&1 || true
+    command -v gcc >/dev/null || apt_install build-essential >/dev/null 2>&1 || true
     GCFLAGS="-O2 -std=gnu17 -Wno-deprecated-declarations -Wno-discarded-qualifiers"
     for w in incompatible-pointer-types int-conversion unused-result unused-variable unused-function unused-but-set-variable \
       format-truncation stringop-truncation stringop-overflow array-bounds maybe-uninitialized calloc-transposed-args \
       unterminated-string-initialization implicit-function-declaration; do
       echo 'int x;' | gcc -Werror "-Wno-error=$w" -x c -c -o /dev/null - 2>/dev/null && GCFLAGS="$GCFLAGS -Wno-error=$w"
     done
-    if apt-get install -y -qq build-essential pkg-config libcairo2-dev "$JPEG" libpng-dev uuid-dev libssl-dev libwebp-dev "$FREERDP" >"$GLOG" 2>&1 &&
+    if apt_install build-essential pkg-config libcairo2-dev "$JPEG" libpng-dev uuid-dev libssl-dev libwebp-dev "$FREERDP" >"$GLOG" 2>&1 &&
       tar -xzf "$GUACD_SRC" -C "$BUILD_DIR" >>"$GLOG" 2>&1 &&
       (cd "$BUILD_DIR/guacamole-server-$GUACD_VERSION" &&
         CFLAGS="$GCFLAGS" ./configure --prefix="$GUACD_PREFIX" --disable-guacenc --disable-guaclog \
