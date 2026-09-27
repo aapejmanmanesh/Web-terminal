@@ -41,10 +41,9 @@ export class Systems {
     const res = await this.probe(s.address);
     const st = this.state.get(id) || { up: null, since: Date.now(), rtt: null, history: [], checkedAt: 0, wakeAt: 0 };
     const now = Date.now();
-    if (st.up !== res.up) {
-      st.since = now;
-      if (res.up && st.wakeAt) st.wakeAt = 0;
-    }
+    if (st.up !== res.up) st.since = now;
+    // A machine that answers is awake, whether or not it was down before.
+    if (res.up && st.wakeAt) st.wakeAt = 0;
     st.up = res.up;
     st.rtt = res.rtt;
     st.checkedAt = now;

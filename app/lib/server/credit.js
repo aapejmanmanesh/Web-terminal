@@ -32,6 +32,12 @@ export const CREDIT_SCRIPT = `// WebTerm author credit — see LICENSE.
     'pointer-events:auto', 'background:#0a0d12', 'border:0', 'border-top:1px solid #1f2733', 'box-sizing:border-box',
   ].map((d) => d + ' !important').join(';');
   const APP_HEIGHT = 'height:calc(100% - ' + H + ') !important';
+  // Full-screen layers of the app end above the credit bar. The mobile shell
+  // keeps its inline height (set while the on-screen keyboard is open).
+  const LAYOUT_CSS =
+    'html body .m-app{height:calc(100dvh - ' + H + ')}' +
+    'html body .m-nav{padding-bottom:0}' +
+    'html body .page,html body .overlay-root{bottom:' + H + '}';
   const CSS =
     ':host{all:initial}' +
     '.bar{box-sizing:border-box;height:' + (BAR - 1) + 'px;display:flex;align-items:center;justify-content:center;gap:5px;' +
@@ -44,6 +50,7 @@ export const CREDIT_SCRIPT = `// WebTerm author credit — see LICENSE.
   let hostCss = null;
   let appCss = null;
   let watchedBody = null;
+  let layout = null;
 
   function build() {
     host = document.createElement('wt-credit');
@@ -78,6 +85,12 @@ export const CREDIT_SCRIPT = `// WebTerm author credit — see LICENSE.
   }
 
   function reserveSpace() {
+    if (document.head && (!layout || layout.parentNode !== document.head || layout.textContent !== LAYOUT_CSS)) {
+      if (layout) layout.remove();
+      layout = document.createElement('style');
+      layout.textContent = LAYOUT_CSS;
+      document.head.appendChild(layout);
+    }
     const app = document.getElementById('app');
     if (!app) return;
     if (appCss === null || app.style.cssText !== appCss) {
