@@ -2,6 +2,12 @@
 # WebTerm installer for Ubuntu 22.04 / 24.04 (also Debian 12).
 #
 #   sudo ./install.sh                 # install or upgrade
+#   sudo ./install.sh --https         # upgrade and choose the HTTPS certificate again
+#
+# A fresh install asks for the first administrator and for how HTTPS is set up:
+#   1) a free Let's Encrypt certificate for your domain (automatic, renews itself),
+#   2) your own certificate files, or 3) a self-signed certificate.
+# Everything can also be given up front (no questions asked):
 #
 # Behind nginx on your own (sub)domain — recommended:
 #   sudo DOMAIN=term.example.com EMAIL=you@example.com ./install.sh
@@ -20,6 +26,7 @@
 #                                     (default: the user who ran sudo)
 #   WITH_IDE=1                        also install code-server for the IDE (0 to skip)
 #   TLS_CERT=/path TLS_KEY=/path      use your own certificate instead of a self-signed one
+#                                     (with DOMAIN: served by nginx; without: directly on PORT)
 #   RESTART_BROKER=1                  on upgrade, restart the terminal broker without asking
 set -euo pipefail
 
@@ -39,7 +46,6 @@ if [ -f "$ETC/config.json" ]; then
   fi
   [ -n "${PORT:-}" ] || PORT=$(grep -Eo '"port": *[0-9]+' "$ETC/config.json" | head -n 1 | grep -Eo '[0-9]+$' || true)
 fi
-if [ -n "$DOMAIN" ]; then PORT="${PORT:-8080}"; else PORT="${PORT:-8443}"; fi
 ADMIN_USER="${ADMIN_USER:-}"
 ADMIN_PASS="${ADMIN_PASS:-}"
 ADMIN_LINUX="${ADMIN_LINUX:-${SUDO_USER:-}}"
@@ -54,29 +60,65 @@ die() { printf '%s✗ %s%s\n' "$c_red" "$*" "$c_off" >&2; exit 1; }
 command -v systemctl >/dev/null || die "systemd is required"
 [ -f "$HERE/app/package.json" ] || die "Run this script from the extracted WebTerm release folder"
 [ -f "$HERE/app/web/dist/index.html" ] || die "The release is missing the built web UI (app/web/dist)"
-if [ -n "$DOMAIN" ]; then
-  echo "$DOMAIN" | grep -Eq '^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$' || die "DOMAIN must be a host name like term.example.com"
-fi
 ARCH="$(uname -m)"
 
 FRESH=1
 [ -f "$DATA/webterm.db" ] && FRESH=0
+# Ask how HTTPS is set up on a first install (or with --https), unless the
+# environment already says so.
+ASK_HTTPS=0
+[ ! -f "$ETC/config.json" ] && [ -z "$DOMAIN" ] && [ -z "${TLS_CERT:-}" ] && ASK_HTTPS=1
+for arg in "$@"; do
+  case "$arg" in
+    --https) ASK_HTTPS=1 ;;
+    -h|--help) sed -n '2,/^set -euo pipefail/p' "$0" | sed '$d' | cut -c3-; exit 0 ;;
+    *) die "Unknown option: $arg (see --help)" ;;
+  esac
+done
+
+# Questions are read from the terminal, so they also work when this script
+# arrives on stdin (curl ... | sudo bash).
+TTY=""
+{ [ -r /dev/tty ] && : </dev/tty; } 2>/dev/null && TTY=/dev/tty
+ask() { # $1 prompt  $2 variable  [$3 = secret]; fails when there is no terminal
+  [ -n "$TTY" ] || return 1
+  if [ "${3:-}" = "secret" ]; then read -r -s -p "$1" "$2" <"$TTY"; echo >&2; else read -r -p "$1" "$2" <"$TTY"; fi
+}
+yes_no() { local a; ask "$1 [y/N] " a || return 1; case "$a" in [yY]*) return 0 ;; *) return 1 ;; esac; }
+valid_domain() { echo "$1" | grep -Eq '^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$'; }
+valid_email() { echo "$1" | grep -Eq '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$'; }
+full_path() { local p="${1/#\~/$HOME}"; readlink -f -- "$p" 2>/dev/null || echo "$p"; }
+cert_ok() { # $1 certificate  $2 key: readable PEM files that belong together
+  [ -r "$1" ] && [ -f "$1" ] || { warn "Cannot read the certificate file $1"; return 1; }
+  [ -r "$2" ] && [ -f "$2" ] || { warn "Cannot read the key file $2"; return 1; }
+  command -v openssl >/dev/null || return 0
+  openssl x509 -in "$1" -noout 2>/dev/null || { warn "$1 is not a PEM certificate"; return 1; }
+  openssl pkey -in "$2" -noout 2>/dev/null || { warn "$2 is not a PEM private key (or it is password-protected)"; return 1; }
+  [ "$(openssl x509 -in "$1" -noout -pubkey | openssl sha256)" = "$(openssl pkey -in "$2" -pubout | openssl sha256)" ] ||
+    { warn "The private key does not belong to the certificate"; return 1; }
+  openssl x509 -in "$1" -noout -checkend 0 >/dev/null || warn "The certificate has expired"
+  return 0
+}
+dns_points_here() { # $1 domain; warns and fails when it does not resolve to this server
+  local ips pub mine ip
+  ips=$(getent ahostsv4 "$1" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ')
+  if [ -z "$ips" ]; then warn "$1 does not resolve. Add a DNS A record pointing to this server's public IP first."; return 1; fi
+  pub=$(curl -4 -fsS --max-time 5 https://api.ipify.org 2>/dev/null || curl -4 -fsS --max-time 5 https://ifconfig.me 2>/dev/null || true)
+  mine=" $(hostname -I 2>/dev/null) $pub "
+  for ip in $ips; do case "$mine" in *" $ip "*) return 0 ;; esac; done
+  warn "$1 points to ${ips% }, but this server's public IP is ${pub:-unknown}."
+  return 1
+}
 
 # ---------------------------------------------------------------- administrator (asked up front)
 # The first administrator is chosen by whoever installs WebTerm; there is no
-# built-in default account. Questions are read from the terminal, so this also
-# works when the script itself arrives on stdin (curl ... | sudo bash).
+# built-in default account.
 if [ "$FRESH" = "1" ]; then
-  TTY=""
-  { [ -r /dev/tty ] && : </dev/tty; } 2>/dev/null && TTY=/dev/tty
-  ask() { # $1 prompt  $2 variable  [$3 = secret]
-    [ -n "$TTY" ] || die "No terminal to ask on. Set ADMIN_USER and ADMIN_PASS, e.g.: sudo ADMIN_USER=admin ADMIN_PASS='...' ./install.sh"
-    if [ "${3:-}" = "secret" ]; then read -r -s -p "$1" "$2" <"$TTY"; echo >&2; else read -r -p "$1" "$2" <"$TTY"; fi
-  }
+  [ -n "$TTY" ] || { [ -n "$ADMIN_USER" ] && [ -n "$ADMIN_PASS" ]; } ||
+    die "No terminal to ask on. Set ADMIN_USER and ADMIN_PASS, e.g.: sudo ADMIN_USER=admin ADMIN_PASS='...' ./install.sh"
   valid_user() { echo "$1" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{1,31}$'; }
   echo
-  printf '%sCreate the WebTerm administrator account%s
-' "$c_green" "$c_off"
+  printf '%sCreate the WebTerm administrator account%s\n' "$c_green" "$c_off"
   if [ -n "$ADMIN_USER" ]; then
     valid_user "$ADMIN_USER" || die "ADMIN_USER must be 2-32 characters: letters, digits, '.', '_' or '-'"
   else
@@ -100,6 +142,66 @@ if [ "$FRESH" = "1" ]; then
   fi
   echo
 fi
+
+# ---------------------------------------------------------------- HTTPS (asked up front)
+if [ "$ASK_HTTPS" = "1" ] && [ -n "$TTY" ]; then
+  printf '%sHTTPS certificate%s\n' "$c_green" "$c_off"
+  echo "  1) Automatic: a free Let's Encrypt certificate for your domain (recommended)."
+  echo "     Needs a domain name that points to this server, and ports 80 and 443 open."
+  echo "     nginx is set up in front of WebTerm and the certificate renews itself."
+  echo "  2) My own certificate: PEM certificate (full chain) and private key files."
+  echo "  3) Self-signed: works without a domain, but browsers show a security warning."
+  while :; do
+    ask "  Choose 1, 2 or 3 [3]: " TLS_CHOICE
+    case "${TLS_CHOICE:-3}" in 1|2|3) TLS_CHOICE="${TLS_CHOICE:-3}"; break ;; esac
+  done
+  case "$TLS_CHOICE" in
+    1)
+      while :; do
+        ask "  Domain name (e.g. term.example.com): " DOMAIN
+        DOMAIN="$(echo "$DOMAIN" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+        valid_domain "$DOMAIN" || { warn "Enter a host name like term.example.com."; continue; }
+        dns_points_here "$DOMAIN" && break
+        yes_no "  Continue with $DOMAIN anyway? (the certificate can only be issued once DNS is right)" && break
+      done
+      while :; do
+        ask "  E-mail for certificate expiry notices (optional, Enter to skip): " EMAIL
+        [ -z "$EMAIL" ] || valid_email "$EMAIL" && break
+        warn "That does not look like an e-mail address."
+      done
+      CERTBOT=1
+      ;;
+    2)
+      while :; do
+        ask "  Certificate file (PEM, full chain): " TLS_CERT
+        ask "  Private key file (PEM): " TLS_KEY
+        TLS_CERT="$(full_path "$TLS_CERT")"; TLS_KEY="$(full_path "$TLS_KEY")"
+        cert_ok "$TLS_CERT" "$TLS_KEY" && break
+      done
+      while :; do
+        ask "  Domain the certificate is for, served by nginx on port 443 (Enter = serve WebTerm directly on port ${PORT:-8443}): " DOMAIN
+        DOMAIN="$(echo "$DOMAIN" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+        [ -z "$DOMAIN" ] || valid_domain "$DOMAIN" && break
+        warn "Enter a host name like term.example.com, or leave it empty."
+      done
+      CERTBOT=0
+      ;;
+    3) [ -z "$DOMAIN" ] || echo "  Keeping https://$DOMAIN behind nginx with its current certificate." ;;
+  esac
+  echo
+fi
+if [ -n "${TLS_CERT:-}" ] || [ -n "${TLS_KEY:-}" ]; then
+  [ -n "${TLS_CERT:-}" ] && [ -n "${TLS_KEY:-}" ] || die "Set both TLS_CERT and TLS_KEY"
+  TLS_CERT="$(full_path "$TLS_CERT")"; TLS_KEY="$(full_path "$TLS_KEY")"
+  cert_ok "$TLS_CERT" "$TLS_KEY" || die "TLS_CERT/TLS_KEY cannot be used"
+fi
+if [ -n "$DOMAIN" ]; then
+  valid_domain "$DOMAIN" || die "DOMAIN must be a host name like term.example.com"
+fi
+[ -z "$EMAIL" ] || valid_email "$EMAIL" || die "EMAIL is not a valid e-mail address"
+# Remember the Let's Encrypt e-mail for upgrades and automatic retries.
+if [ -z "$EMAIL" ] && [ -f "$ETC/letsencrypt-email" ]; then EMAIL="$(head -n 1 "$ETC/letsencrypt-email")"; fi
+if [ -n "$DOMAIN" ]; then PORT="${PORT:-8080}"; else PORT="${PORT:-8443}"; fi
 
 # ---------------------------------------------------------------- packages
 step "Installing system packages"
@@ -334,10 +436,19 @@ if [ "${WITH_RDP:-1}" = "1" ] && [ "$(guacd_version)" != "$GUACD_VERSION" ]; the
     pkg_available libjpeg-turbo8-dev || JPEG=libjpeg-dev
     GLOG=/tmp/webterm-guacd-build.log
     BUILD_DIR=$(mktemp -d)
+    # Newer compilers and FreeRDP releases add warnings that guacd's build
+    # treats as errors (also inside configure's feature checks): relax those.
+    command -v gcc >/dev/null || apt-get install -y -qq build-essential >/dev/null 2>&1 || true
+    GCFLAGS="-O2 -std=gnu17 -Wno-deprecated-declarations -Wno-discarded-qualifiers"
+    for w in incompatible-pointer-types int-conversion unused-result unused-variable unused-function unused-but-set-variable \
+      format-truncation stringop-truncation stringop-overflow array-bounds maybe-uninitialized calloc-transposed-args \
+      unterminated-string-initialization implicit-function-declaration; do
+      echo 'int x;' | gcc -Werror "-Wno-error=$w" -x c -c -o /dev/null - 2>/dev/null && GCFLAGS="$GCFLAGS -Wno-error=$w"
+    done
     if apt-get install -y -qq build-essential pkg-config libcairo2-dev "$JPEG" libpng-dev uuid-dev libssl-dev libwebp-dev "$FREERDP" >"$GLOG" 2>&1 &&
       tar -xzf "$GUACD_SRC" -C "$BUILD_DIR" >>"$GLOG" 2>&1 &&
       (cd "$BUILD_DIR/guacamole-server-$GUACD_VERSION" &&
-        CFLAGS="-O2 -Wno-error=deprecated-declarations" ./configure --prefix="$GUACD_PREFIX" --disable-guacenc --disable-guaclog \
+        CFLAGS="$GCFLAGS" ./configure --prefix="$GUACD_PREFIX" --disable-guacenc --disable-guaclog \
           --without-ssh --without-telnet --without-vnc --without-websockets &&
         make -j"$(nproc)" && make install) >>"$GLOG" 2>&1 &&
       [ "$(guacd_version)" = "$GUACD_VERSION" ]; then
@@ -426,7 +537,21 @@ nginx_site() { # $1 cert  $2 key  $3 output file
   sed -e "s|__DOMAIN__|$DOMAIN|g" -e "s|__PORT__|$PORT|g" -e "s|__CERT__|$1|g" -e "s|__KEY__|$2|g" -e "s|__HTTP2__|http2|g" \
     "$HERE/nginx-webterm.conf" > "$3"
   # Hosts with IPv6 disabled cannot bind [::] — drop those listen lines.
-  [ -e /proc/net/if_inet6 ] || sed -i '/listen \[::\]/d' "$3"
+  ipv6_ok || sed -i '/listen \[::\]/d' "$3"
+}
+ipv6_ok() { "$NODE" -e "require('net').createServer().on('error',()=>process.exit(1)).listen(0,'::',()=>process.exit(0))" 2>/dev/null; }
+nginx_test() {
+  nginx -t >/tmp/webterm-nginx-test.log 2>&1 && return 0
+  # Ubuntu's stock "Welcome to nginx" site listens on [::]:80, which fails on
+  # hosts without IPv6. It is not needed next to the WebTerm site.
+  if grep -q 'Address family not supported' /tmp/webterm-nginx-test.log && ! ipv6_ok &&
+     [ -L /etc/nginx/sites-enabled/default ] && grep -Eq '^[^#]*listen +\[::\]' /etc/nginx/sites-enabled/default; then
+    warn "IPv6 is not available: disabling nginx's default site (it listens on [::]:80)"
+    rm -f /etc/nginx/sites-enabled/default
+    nginx -t >/tmp/webterm-nginx-test.log 2>&1 && return 0
+  fi
+  cat /tmp/webterm-nginx-test.log
+  return 1
 }
 if [ -n "$DOMAIN" ]; then
   if [ "$NGINX" != "1" ]; then
@@ -446,6 +571,7 @@ if [ -n "$DOMAIN" ]; then
     elif [ -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
       CERT="/etc/letsencrypt/live/$DOMAIN/fullchain.pem"; KEY="/etc/letsencrypt/live/$DOMAIN/privkey.pem"
     fi
+    [ -n "$CERT" ] && { systemctl disable --now webterm-cert.timer >/dev/null 2>&1 || true; }
     if [ -z "$CERT" ]; then
       # Temporary certificate so nginx can start and answer the ACME challenge.
       install -d -m 0750 "$ETC/tls"
@@ -457,21 +583,76 @@ if [ -n "$DOMAIN" ]; then
     fi
     nginx_site "$CERT" "$KEY" "$SITE"
     [ -n "$LINK" ] && ln -sf "$SITE" "$LINK"
-    nginx -t >/tmp/webterm-nginx-test.log 2>&1 || { cat /tmp/webterm-nginx-test.log; die "nginx configuration test failed (see above)"; }
+    nginx_test || die "nginx configuration test failed (see above)"
     systemctl enable nginx >/dev/null 2>&1 || true
     systemctl reload nginx 2>/dev/null || systemctl restart nginx
+    if [ "$CERTBOT" = "1" ] && command -v certbot >/dev/null; then
+      # webterm-cert gets the certificate and points nginx at it; while it has
+      # not been issued yet (DNS not updated, port 80 closed, ...) a timer
+      # retries it every hour, so nothing has to be re-run by hand.
+      {
+        echo '#!/bin/sh'
+        echo '# Generated by the WebTerm installer: obtains the Let'"'"'s Encrypt certificate for'
+        echo '# WebTerm, points nginx at it and stops the retry timer. Run it to retry now.'
+        echo 'set -u'
+        printf 'DOMAIN=%q\nEMAIL=%q\nSITE=%q\n' "$DOMAIN" "$EMAIL" "$SITE"
+        cat <<'CERT'
+LIVE="/etc/letsencrypt/live/$DOMAIN"
+LOG=/var/log/webterm-cert.log
+if [ ! -s "$LIVE/fullchain.pem" ]; then
+  if [ -n "$EMAIL" ]; then set -- --email "$EMAIL"; else set -- --register-unsafely-without-email; fi
+  echo "$(date '+%F %T') requesting a certificate for $DOMAIN" >>"$LOG"
+  if ! certbot certonly --webroot -w /var/www/webterm-acme -d "$DOMAIN" --non-interactive --agree-tos "$@" \
+       --deploy-hook "systemctl reload nginx" >>"$LOG" 2>&1; then
+    echo "The certificate for $DOMAIN was not issued yet (details: $LOG)." >&2
+    echo "Check that $DOMAIN points to this server and that port 80 is reachable from the internet." >&2
+    exit 1
+  fi
+fi
+sed -i -e "s|^\([[:space:]]*ssl_certificate\)[[:space:]].*;|\1     $LIVE/fullchain.pem;|" \
+       -e "s|^\([[:space:]]*ssl_certificate_key\)[[:space:]].*;|\1 $LIVE/privkey.pem;|" "$SITE"
+nginx -t >>"$LOG" 2>&1 && systemctl reload nginx
+systemctl disable --now webterm-cert.timer >/dev/null 2>&1 || true
+echo "https://$DOMAIN now uses its Let's Encrypt certificate (renewed automatically by certbot)."
+CERT
+      } > /usr/local/sbin/webterm-cert
+      chmod 0755 /usr/local/sbin/webterm-cert
+      if [ -n "$EMAIL" ]; then echo "$EMAIL" > "$ETC/letsencrypt-email"; chmod 0640 "$ETC/letsencrypt-email"; fi
+      cat > /etc/systemd/system/webterm-cert.service <<'UNIT'
+[Unit]
+Description=WebTerm: obtain the Let's Encrypt certificate
+After=network-online.target nginx.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/webterm-cert
+UNIT
+      cat > /etc/systemd/system/webterm-cert.timer <<'UNIT'
+[Unit]
+Description=WebTerm: retry the Let's Encrypt certificate hourly until it is issued
+
+[Timer]
+OnActiveSec=10min
+OnUnitActiveSec=1h
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target
+UNIT
+      systemctl daemon-reload
+    fi
     if [ "${SELF:-0}" = "1" ] && [ "$CERTBOT" = "1" ] && command -v certbot >/dev/null; then
       step "Requesting a Let's Encrypt certificate for $DOMAIN"
-      if [ -n "$EMAIL" ]; then ACCT=(--email "$EMAIL"); else ACCT=(--register-unsafely-without-email); fi
-      if certbot certonly --webroot -w /var/www/webterm-acme -d "$DOMAIN" --non-interactive --agree-tos "${ACCT[@]}" \
-           --deploy-hook "systemctl reload nginx" >/tmp/webterm-certbot.log 2>&1; then
-        nginx_site "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" "/etc/letsencrypt/live/$DOMAIN/privkey.pem" "$SITE"
-        nginx -t >/dev/null 2>&1 && systemctl reload nginx
+      if /usr/local/sbin/webterm-cert >/dev/null 2>&1; then
         SELF=0
       else
-        warn "Let's Encrypt failed (see /tmp/webterm-certbot.log). Check that $DOMAIN points to this server and port 80 is reachable,"
-        warn "then run:  sudo certbot certonly --webroot -w /var/www/webterm-acme -d $DOMAIN --deploy-hook 'systemctl reload nginx'"
-        warn "and re-run this installer. Until then nginx uses a temporary self-signed certificate."
+        cp /var/log/webterm-cert.log /tmp/webterm-certbot.log 2>/dev/null || true
+        systemctl enable --now webterm-cert.timer >/dev/null 2>&1 || true
+        warn "Let's Encrypt could not issue the certificate yet (see /var/log/webterm-cert.log)."
+        warn "Check that $DOMAIN points to this server and that ports 80 and 443 are reachable from the internet."
+        warn "WebTerm retries automatically every hour and switches to the real certificate once it is issued;"
+        warn "to retry right away: sudo webterm-cert. Until then nginx uses a temporary self-signed certificate."
       fi
     elif [ "${SELF:-0}" = "1" ]; then
       warn "Using a temporary self-signed certificate. Provide TLS_CERT/TLS_KEY or enable CERTBOT=1 for a trusted one."
@@ -483,15 +664,30 @@ sleep 1
 systemctl is-active --quiet webterm.service || die "The web server did not start: journalctl -u webterm"
 echo
 printf '%s✓ WebTerm is running.%s\n\n' "$c_green" "$c_off"
+self_signed() { [ "$(openssl x509 -in "$1" -noout -subject 2>/dev/null | cut -d= -f2-)" = "$(openssl x509 -in "$1" -noout -issuer 2>/dev/null | cut -d= -f2-)" ]; }
+expiry() { openssl x509 -in "$1" -noout -enddate 2>/dev/null | cut -d= -f2; }
 if [ -n "$DOMAIN" ]; then
   echo "   https://$DOMAIN"
   echo "   ${c_dim}(WebTerm listens on 127.0.0.1:$PORT; nginx serves it on 443)${c_off}"
+  SITE_CERT=$(sed -n 's/^ *ssl_certificate  *\([^;]*\);.*/\1/p' "${SITE:-$ETC/nginx-webterm.conf}" 2>/dev/null | head -n 1)
+  echo
+  case "$SITE_CERT" in
+    /etc/letsencrypt/*) echo "   HTTPS: Let's Encrypt certificate, renewed automatically (valid until $(expiry "$SITE_CERT"))." ;;
+    *selfsigned*) echo "   ${c_amber}HTTPS: temporary self-signed certificate until Let's Encrypt succeeds (see the warnings above).${c_off}" ;;
+    ?*) echo "   HTTPS: your certificate (valid until $(expiry "$SITE_CERT")). After renewing it, run again with TLS_CERT/TLS_KEY." ;;
+  esac
 elif [ "$DIRECT_TLS" = "1" ]; then
   FP=$(openssl x509 -in "$ETC/tls/cert.pem" -noout -fingerprint -sha256 2>/dev/null | cut -d= -f2)
   for ip in $(hostname -I 2>/dev/null); do case "$ip" in *:*) ;; *) echo "   https://$ip:$PORT" ;; esac; done
   echo "   https://$HOST:$PORT"
   echo
-  echo "   ${c_dim}Certificate SHA-256: $FP${c_off}"
+  if self_signed "$ETC/tls/cert.pem"; then
+    echo "   HTTPS: self-signed certificate, so browsers show a warning the first time."
+    echo "   ${c_dim}Certificate SHA-256: $FP${c_off}"
+    echo "   For a trusted certificate on your domain: sudo ./install.sh --https"
+  else
+    echo "   HTTPS: your certificate (valid until $(expiry "$ETC/tls/cert.pem")). After renewing it, run again with TLS_CERT/TLS_KEY."
+  fi
 else
   echo "   http://127.0.0.1:$PORT (behind your reverse proxy)"
 fi
