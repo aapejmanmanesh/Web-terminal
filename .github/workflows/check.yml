@@ -1,0 +1,49 @@
+# Quick checks on every push and pull request: shell and JavaScript syntax, and
+# that the server starts, serves the pages and adds the author credit.
+name: Check
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Shell scripts
+        run: |
+          for f in install.sh uninstall.sh scripts/*.sh remote-desktop/*.sh; do bash -n "$f"; done
+          shellcheck --severity=error install.sh uninstall.sh scripts/*.sh remote-desktop/*.sh
+
+      - name: JavaScript syntax
+        run: |
+          for f in app/bin/*.mjs app/lib/*/*.js scripts/*.mjs; do node --check "$f"; done
+          for f in app/web/dist/assets/*.js app/web/dist/sw.js; do node --check "$f"; done
+
+      - name: Web UI references
+        run: |
+          cd app/web/dist
+          for page in *.html; do
+            for ref in $(grep -o '/assets/[A-Za-z0-9_.-]*' "$page"); do test -f ".$ref" || { echo "::error::$page references missing $ref"; exit 1; }; done
+          done
+          cd assets
+          for f in *.js; do
+            for ref in $(grep -o '"\./[A-Za-z0-9_-]*\.js"' "$f" | tr -d '"'); do test -f "$ref" || { echo "::error::$f imports missing $ref"; exit 1; }; done
+          done
+
+      - name: Server smoke test
+        run: |
+          cd app && npm ci --omit=dev --no-audit --no-fund --loglevel=error
+          mkdir -p /tmp/wt && printf '{"listen":{"host":"127.0.0.1","port":18443},"tls":null,"dataDir":"/tmp/wt","brokerSocket":"/tmp/wt/broker.sock"}' > /tmp/wt/config.json
+          WEBTERM_CONFIG=/tmp/wt/config.json node --disable-warning=ExperimentalWarning bin/webterm-server.mjs > /tmp/wt/server.log 2>&1 &
+          for i in $(seq 1 50); do curl -fs http://127.0.0.1:18443/login -o /tmp/wt/login.html && break; sleep 0.2; done
+          cat /tmp/wt/server.log
+          grep -q '/credit.js' /tmp/wt/login.html
+          curl -fs http://127.0.0.1:18443/credit.js | grep -q 'https://github.com/aapejmanmanesh'
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18443/)" = 302

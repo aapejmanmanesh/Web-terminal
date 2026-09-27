@@ -1,0 +1,52 @@
+# Builds the installable archive (webterm-<version>.tar.xz) and attaches it to a
+# GitHub release. Publish a release with a tag like v1.3.1 to run it, or start it
+# by hand (Actions → Release → Run workflow) to get the archive as an artifact.
+name: Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    # The oldest supported Ubuntu, so the compiled terminal module runs on 22.04 and newer.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install build tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq build-essential python3 xz-utils
+
+      - name: Check that the tag matches the version
+        if: github.event_name == 'release'
+        run: |
+          version="$(node -p "require('./app/package.json').version")"
+          if [ "$GITHUB_REF_NAME" != "v$version" ] && [ "$GITHUB_REF_NAME" != "$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match app/package.json version $version"
+            exit 1
+          fi
+
+      - name: Build the release archive
+        run: ./scripts/make-release.sh
+
+      - name: Keep the archive as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: webterm-release
+          path: |
+            dist/webterm-*.tar.xz
+            dist/webterm-*.tar.xz.sha256
+
+      - name: Attach the archive to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" dist/webterm-*.tar.xz dist/webterm-*.tar.xz.sha256 --clobber

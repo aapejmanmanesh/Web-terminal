@@ -27,6 +27,8 @@
 #   WITH_IDE=1                        also install code-server for the IDE (0 to skip)
 #   TLS_CERT=/path TLS_KEY=/path      use your own certificate instead of a self-signed one
 #                                     (with DOMAIN: served by nginx; without: directly on PORT)
+#   TLS_SELF_SIGNED=1                 use a self-signed certificate without asking
+#   WITH_RDP=1                        build RDP support (guacd) (0 to skip)
 #   RESTART_BROKER=1                  on upgrade, restart the terminal broker without asking
 set -euo pipefail
 
@@ -67,7 +69,7 @@ FRESH=1
 # Ask how HTTPS is set up on a first install (or with --https), unless the
 # environment already says so.
 ASK_HTTPS=0
-[ ! -f "$ETC/config.json" ] && [ -z "$DOMAIN" ] && [ -z "${TLS_CERT:-}" ] && ASK_HTTPS=1
+[ ! -f "$ETC/config.json" ] && [ -z "$DOMAIN" ] && [ -z "${TLS_CERT:-}" ] && [ "${TLS_SELF_SIGNED:-0}" != "1" ] && ASK_HTTPS=1
 for arg in "$@"; do
   case "$arg" in
     --https) ASK_HTTPS=1 ;;

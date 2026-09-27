@@ -1,0 +1,43 @@
+WebTerm License (MIT with Attribution)
+
+Copyright (c) 2026 APA (https://github.com/aapejmanmanesh)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+1. The above copyright notice and this permission notice shall be included in
+   all copies or substantial portions of the Software.
+
+2. Attribution. Every user interface of the Software, and of any work derived
+   from it, must keep showing the author credit "Built by APA" on each of its
+   pages, with "APA" linking to https://github.com/aapejmanmanesh. The credit
+   must stay visible and legible and must not be removed, hidden, obscured,
+   renamed or altered.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+-------------------------------------------------------------------------------
+Third-party components
+
+WebTerm bundles or downloads third-party software under its own licenses:
+
+- Node.js (release archives, node/)            MIT and others, see node/LICENSE
+- Apache Guacamole server (guacd/) and its
+  JavaScript client (web UI)                    Apache License 2.0
+- xterm.js and its addons                       MIT
+- dockview                                      MIT
+- noVNC                                         MPL 2.0
+- node-pty                                      MIT
+- ws                                            MIT
+- JetBrains Mono and Space Grotesk fonts        SIL Open Font License 1.1
+- code-server (optional, installed separately)  MIT
