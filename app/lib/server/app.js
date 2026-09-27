@@ -19,7 +19,7 @@ import { StaticFiles } from './static.js';
 import { HttpError, readJson, sendJson } from './http.js';
 import { buildRoutes } from './routes.js';
 
-export const VERSION = '1.3.0';
+export const VERSION = '1.3.1';
 
 export class App {
   constructor(cfg) {
@@ -186,7 +186,7 @@ export class App {
 
   notBuilt(res) {
     res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('Frontend is not built. Run: npm run build');
+    res.end('The web UI is missing (app/web/dist). Reinstall from a WebTerm release.');
   }
 
   fail(res, e) {

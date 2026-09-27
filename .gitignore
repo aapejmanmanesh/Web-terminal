@@ -9,3 +9,5 @@ node_modules/
 # Local test data
 *.log
 .DS_Store
+*.orig
+*.rej
