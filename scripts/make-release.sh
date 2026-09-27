@@ -38,7 +38,13 @@ rm -rf "$STAGE/app/node_modules"
 
 step "Installing production dependencies (compiles node-pty)"
 (cd "$STAGE/app" && npm ci --omit=dev --no-audit --no-fund --loglevel=error)
-(cd "$STAGE/app" && node -e "require('node-pty'); require('ws'); require('@xterm/headless')") || die "dependencies do not load"
+# node-pty ships Windows/macOS binaries and sources (~60 MB) that Linux never uses.
+rm -rf "$STAGE/app/node_modules/node-pty/prebuilds" "$STAGE/app/node_modules/node-pty/deps" "$STAGE/app/node_modules/node-pty/third_party"
+find "$STAGE/app/node_modules" -type d -empty -delete
+(cd "$STAGE/app" && node -e "require('ws'); require('@xterm/headless');
+  const p = require('node-pty').spawn('/bin/echo', ['pty-ok'], {});
+  let out = ''; p.onData((d) => (out += d));
+  p.onExit(() => process.exit(out.includes('pty-ok') ? 0 : 1));") || die "dependencies do not work"
 
 step "Adding the Node.js runtime"
 TMP="$(mktemp -d)"
@@ -58,8 +64,13 @@ fi
 mkdir -p "$TMP/node" "$STAGE/node/bin"
 tar -xJf "$TMP/node.tar.xz" -C "$TMP/node" --strip-components=1
 cp "$TMP/node/bin/node" "$STAGE/node/bin/node"
+# Official Node.js binaries carry ~18 MB of debug symbols; native addons only
+# need the dynamic symbol table, which --strip-unneeded keeps.
+if command -v strip >/dev/null; then strip --strip-unneeded "$STAGE/node/bin/node"; fi
 cp "$TMP/node/LICENSE" "$STAGE/node/LICENSE"
-"$STAGE/node/bin/node" -e "process.chdir('$STAGE/app'); require('$STAGE/app/node_modules/node-pty')" || die "bundled Node.js cannot load node-pty"
+"$STAGE/node/bin/node" -e "const p = require('$STAGE/app/node_modules/node-pty').spawn('/bin/echo', ['pty-ok'], {});
+  let out = ''; p.onData((d) => (out += d));
+  p.onExit(() => process.exit(out.includes('pty-ok') ? 0 : 1));" || die "bundled Node.js cannot run node-pty"
 
 step "Packing $NAME.tar.xz"
 chmod 0755 "$STAGE/install.sh" "$STAGE/uninstall.sh" "$STAGE/app/bin/"*
