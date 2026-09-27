@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sign in · WebTerm</title>
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0A0D12">
+<meta name="application-name" content="WebTerm">
+<meta name="apple-mobile-web-app-title" content="WebTerm">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="referrer" content="no-referrer">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="stylesheet" href="/assets/login-D6NV7DYA.css">
+<script type="module" src="/assets/login-Q2V5HSIC.js"></script>
+</head>
+<body>
+<div class="login">
+  <section class="login-art" aria-hidden="true">
+    <canvas id="rain"></canvas>
+    <div class="login-art-fade"></div>
+    <div class="login-brand"><img src="/icons/logo.svg" width="30" height="30" alt=""><span>webterm</span></div>
+    <div class="login-tagline">Your terminals keep running.<br><span>Even when you don’t.</span></div>
+  </section>
+  <main class="login-panel">
+    <form id="login" class="login-form" autocomplete="on">
+      <div class="login-mobile-brand"><img src="/icons/logo.svg" width="34" height="34" alt=""><span>webterm</span></div>
+      <h1>Sign in</h1>
+      <label class="field"><span class="field-label">Username</span><input id="username" class="input" name="username" autocomplete="username" autocapitalize="off" spellcheck="false" required autofocus></label>
+      <label class="field"><span class="field-label">Password</span><input id="password" class="input" name="password" type="password" autocomplete="current-password" required></label>
+      <label class="check"><input id="remember" type="checkbox" checked><span>Keep me signed in on this device</span></label>
+      <p id="err" class="login-err" role="alert" hidden></p>
+      <button id="submit" class="btn btn-primary btn-lg" type="submit">Unlock workspace <span aria-hidden="true">→</span></button>
+    </form>
+  </main>
+</div>
+</body>
+</html>

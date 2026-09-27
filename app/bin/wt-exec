@@ -1,0 +1,11 @@
+#!/bin/bash
+# Runs as the target user (after setpriv dropped privileges):
+# enter the requested working directory, then exec the command.
+dir="${WT_CWD:-$HOME}"
+unset WT_CWD
+case "$dir" in
+  "~") dir="$HOME" ;;
+  "~/"*) dir="$HOME/${dir#\~/}" ;;
+esac
+cd -- "$dir" 2>/dev/null || cd -- "$HOME" 2>/dev/null || cd /
+exec "$@"

@@ -1,0 +1,11 @@
+# Dependencies and runtimes (the installer fetches/builds them; release archives bundle them)
+node_modules/
+/node/
+
+# Release archives built by scripts/make-release.sh
+/dist/
+*.tar.xz
+
+# Local test data
+*.log
+.DS_Store
